@@ -127,3 +127,55 @@ def test_monitor_flags_cold_snap(workspace):
     report = monitor.run(params)
     assert report["status"] == "alert"
     assert any("PSI" in a for a in report["alerts"])
+
+
+@pytest.mark.parametrize("layout", ["odd_labels", "date_plus_hour", "text_french_numbers",
+                                    "second_sheet"])
+def test_parse_hq_xlsx_finds_columns_by_content(tmp_path, layout):
+    ts = pd.date_range("2023-01-01 01:00", periods=48, freq="h")
+    mw = np.arange(48) * 10 + 20000.5
+    if layout == "odd_labels":
+        body = pd.DataFrame({"Date et heure": ts, "Moyenne horaire (MW)": mw})
+    elif layout == "date_plus_hour":
+        body = pd.DataFrame({"Jour": ts.normalize() - pd.to_timedelta((ts.hour == 0) * 24, "h"),
+                             "Heure": np.where(ts.hour == 0, 24, ts.hour),
+                             "Demande totale": mw})
+    elif layout == "text_french_numbers":
+        body = pd.DataFrame({"Date": ts.strftime("%Y-%m-%d %H:%M"),
+                             "Demande (MW)": [f"{v:,.1f}".replace(",", " ").replace(".", ",")
+                                              for v in mw]})
+    else:
+        body = pd.DataFrame({"Date": ts, "Demande (MW)": mw})
+    path = tmp_path / "hq.xlsx"
+    with pd.ExcelWriter(path) as xw:
+        if layout == "second_sheet":
+            pd.DataFrame([["Notes"], ["Source: Hydro-Québec"]]).to_excel(
+                xw, sheet_name="Lisez-moi", index=False, header=False)
+        pd.DataFrame([["Historique de la demande"]]).to_excel(
+            xw, sheet_name="Données", index=False, header=False)
+        body.to_excel(xw, sheet_name="Données", index=False, startrow=2)
+    hourly = parse_hq_xlsx(path)
+    assert len(hourly) == 48
+    assert hourly["timestamp"].iloc[0] == pd.Timestamp("2023-01-01 00:00")
+    assert hourly["demand_mw"].iloc[0] == pytest.approx(20000.5)
+
+
+def test_parse_hq_real_layout_text_dates_are_day_first(tmp_path):
+    """Real 2019 file: 'Date' | 'Moyenne (MW)', dates like 05/02/2019 01:00 (5 February)."""
+    ts = pd.date_range("2019-02-05 01:00", periods=48, freq="h")
+    body = pd.DataFrame({"Date": ts.strftime("%d/%m/%Y %H:%M"),
+                         "Moyenne (MW)": np.linspace(23762.55, 24190.08, 48)})
+    path = tmp_path / "hq.xlsx"
+    body.to_excel(path, index=False)
+    hourly = parse_hq_xlsx(path)
+    assert hourly["timestamp"].iloc[0] == pd.Timestamp("2019-02-05 00:00")
+    assert hourly["timestamp"].dt.month.eq(2).all()
+    assert hourly["demand_mw"].iloc[0] == pytest.approx(23762.55)
+
+
+def test_parse_hq_real_layout_excel_datetimes(tmp_path):
+    ts = pd.date_range("2019-01-01 01:00", periods=48, freq="h")
+    path = tmp_path / "hq.xlsx"
+    pd.DataFrame({"Date": ts, "Moyenne (MW)": 23762.55}).to_excel(path, index=False)
+    hourly = parse_hq_xlsx(path)
+    assert len(hourly) == 48 and hourly["timestamp"].iloc[0] == pd.Timestamp("2019-01-01")

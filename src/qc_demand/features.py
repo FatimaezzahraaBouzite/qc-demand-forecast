@@ -26,7 +26,7 @@ def build_features(df: pd.DataFrame, params: dict) -> pd.DataFrame:
     out["dow"] = idx.dayofweek
     out["is_weekend"] = (idx.dayofweek >= 5).astype(int)
     out["month"] = idx.month
-    doy = idx.dayofyear
+    doy = idx.day_of_year
     out["doy_sin"] = np.sin(2 * np.pi * doy / 365.25)
     out["doy_cos"] = np.cos(2 * np.pi * doy / 365.25)
     hol = qc_holidays(range(idx.min().year, idx.max().year + 2))

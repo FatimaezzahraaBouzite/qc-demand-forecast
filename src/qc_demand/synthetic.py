@@ -8,7 +8,7 @@ import pandas as pd
 def make_daily(start: str = "2019-01-01", end: str = "2023-12-31", seed: int = 0) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     idx = pd.date_range(start, end, freq="D", name="date")
-    doy = idx.dayofyear.to_numpy()
+    doy = idx.day_of_year.to_numpy()
     # Québec-like climate: ~ -10 °C in January, ~ 21 °C in July
     temp = 5.5 - 15.5 * np.cos(2 * np.pi * (doy - 20) / 365.25) + rng.normal(0, 4, len(idx))
     hdd = np.clip(18 - temp, 0, None)

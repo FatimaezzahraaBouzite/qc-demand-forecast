@@ -2,13 +2,14 @@
 
 Sources
 - Hydro-Québec, "Historique de la demande d'électricité au Québec" (hourly, one XLSX
-  per year, columns "Date" and "Demande (MW)"). Licence CC-BY-NC 4.0.
+  per year, columns "Date" and "Moyenne (MW)", dates as dd/mm/yyyy hh:mm). Licence CC-BY-NC 4.0.
   Values are hour-ending: 2019-01-01 02:00 is the average of 01:05-02:00.
 - Open-Meteo historical archive (ERA5 reanalysis), no API key, CC BY 4.0.
 """
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 import numpy as np
@@ -37,25 +38,90 @@ def download_hq_year(year: int, url_template: str, dest: Path = config.DATA_RAW)
     return out
 
 
+DATE_LIKE = re.compile(r"^\s*(\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]\d{4})")
+
+
+def _as_datetimes(col: pd.Series) -> pd.Series:
+    """Datetime cells and date-like strings only; plain numbers are not dates."""
+    is_dt = col.map(lambda v: isinstance(v, pd.Timestamp) or
+                    (hasattr(v, "year") and not isinstance(v, str)))
+    is_str = col.map(lambda v: isinstance(v, str) and bool(DATE_LIKE.match(v)))
+    out = pd.Series(pd.NaT, index=col.index, dtype="datetime64[ns]")
+    if is_dt.any():
+        out[is_dt] = pd.to_datetime(col[is_dt].astype("object"))
+    iso = is_str & col.map(lambda v: isinstance(v, str) and v.strip()[:4].isdigit())
+    other = is_str & ~iso
+    if iso.any():  # 2019-02-05 ...: year first, unambiguous
+        out[iso] = pd.to_datetime(col[iso].astype("object"), errors="coerce", format="mixed")
+    if other.any():  # HQ files are French: 05/02/2019 is 5 February, not 2 May
+        out[other] = pd.to_datetime(col[other].astype("object"), errors="coerce",
+                                    format="mixed", dayfirst=True)
+    return out
+
+
+def _as_numbers(col: pd.Series) -> pd.Series:
+    if not pd.api.types.is_numeric_dtype(col):  # French decimals: "21 345,6" -> 21345.6
+        col = col.map(lambda v: v.replace(" ", "").replace(" ", "").replace(",", ".")
+                      if isinstance(v, str) else v)
+    return pd.to_numeric(col, errors="coerce")
+
+
+def _parse_sheet(raw: pd.DataFrame) -> pd.DataFrame:
+    """Find the timestamp and demand columns by their CONTENT, not their labels.
+
+    Labels vary between files and years (accents, units, extra title rows), so:
+    - timestamp column = the column with the most date-like cells;
+    - demand column    = the column with the most values in a plausible MW range;
+    - if timestamps carry no time of day, an hour column (1-24) is combined with them.
+    """
+    raw = raw.dropna(how="all").dropna(axis=1, how="all")
+    raw.columns = range(raw.shape[1])
+    n = len(raw)
+    dates = {c: _as_datetimes(raw[c]) for c in raw.columns}
+    date_share = {c: s.notna().mean() for c, s in dates.items()}
+    date_col = max(date_share, key=date_share.get)
+    if date_share[date_col] < 0.5:
+        raise ValueError("no date column")
+    nums = {c: _as_numbers(raw[c]) for c in raw.columns if c != date_col}
+    mw_share = {c: s.between(5_000, 60_000).mean() for c, s in nums.items()}
+    if not mw_share or max(mw_share.values()) < 0.5:
+        raise ValueError("no demand column in the 5,000-60,000 MW range")
+    dem_col = max(mw_share, key=mw_share.get)
+
+    ts = dates[date_col]
+    valid = ts.dropna()
+    if len(valid) and (valid.dt.hour == 0).all() and (valid.dt.minute == 0).all():
+        hour_share = {c: s.between(0, 24).mean() for c, s in nums.items()
+                      if c != dem_col and s.dropna().apply(float.is_integer).all()}
+        hour_col = max(hour_share, key=hour_share.get) if hour_share else None
+        if hour_col is None or hour_share[hour_col] < 0.5:
+            raise ValueError("timestamps have no time of day and no hour column was found")
+        ts = ts + pd.to_timedelta(nums[hour_col], unit="h")
+        log.info("Combined date column %s with hour column %s", date_col, hour_col)
+
+    df = pd.DataFrame({"timestamp": ts, "demand_mw": nums[dem_col]}).dropna(subset=["timestamp"])
+    log.info("Parsed %d of %d rows (date col %s, demand col %s)", len(df), n, date_col, dem_col)
+    return df
+
+
 def parse_hq_xlsx(path: Path) -> pd.DataFrame:
-    """Return hourly frame [timestamp, demand_mw]. Tolerant to header offsets."""
-    raw = pd.read_excel(path, header=None)
-    # find the header row: the first row containing a cell starting with "Date"
-    header_row = next(
-        i for i, row in raw.iterrows()
-        if any(str(c).strip().lower().startswith("date") for c in row.values)
-    )
-    df = raw.iloc[header_row + 1:].copy()
-    df.columns = [str(c).strip() for c in raw.iloc[header_row].values]
-    date_col = next(c for c in df.columns if c.lower().startswith("date"))
-    dem_col = next(c for c in df.columns if "demande" in c.lower())
-    df = df[[date_col, dem_col]].rename(columns={date_col: "timestamp", dem_col: "demand_mw"})
-    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
-    df["demand_mw"] = pd.to_numeric(df["demand_mw"], errors="coerce")
-    df = df.dropna(subset=["timestamp"])
+    """Return hourly frame [timestamp, demand_mw] from one Hydro-Québec yearly file."""
+    sheets = pd.read_excel(path, header=None, sheet_name=None)
+    errors = {}
+    for name, raw in sheets.items():
+        try:
+            df = _parse_sheet(raw)
+            break
+        except ValueError as e:
+            errors[name] = str(e)
+    else:
+        preview = "\n\n".join(f"--- sheet {k!r}: {errors[k]}\n{v.head(8).to_string()}"
+                              for k, v in sheets.items())
+        raise ValueError(f"Could not find timestamp + demand columns in {path.name}.\n"
+                         f"First rows of each sheet:\n{preview}")
     # hour-ending -> hour-beginning so 00:00 belongs to the previous day correctly
     df["timestamp"] = df["timestamp"] - pd.Timedelta(hours=1)
-    return df
+    return df.drop_duplicates("timestamp").sort_values("timestamp").reset_index(drop=True)
 
 
 def hourly_to_daily(hourly: pd.DataFrame, min_hours: int = 20) -> pd.DataFrame:
@@ -72,7 +138,7 @@ def hourly_to_daily(hourly: pd.DataFrame, min_hours: int = 20) -> pd.DataFrame:
     return daily.drop(columns="n_hours")
 
 
-# --------------------------------------------------------------------------- weather
+# ----------------------------------------------------- weather
 def _open_meteo(url: str, lat: float, lon: float, tz: str, **extra) -> pd.DataFrame:
     params = {"latitude": lat, "longitude": lon, "daily": DAILY_VARS, "timezone": tz, **extra}
     r = requests.get(url, params=params, timeout=60)
@@ -115,7 +181,7 @@ def fetch_weather_forecast(cities: dict, tz: str, days: int = 3) -> pd.DataFrame
     return weighted_weather(frames, cities)
 
 
-# --------------------------------------------------------------------------- quality
+# ---------------------------------------------------------- quality
 def validate_daily(df: pd.DataFrame) -> dict:
     """Simple data-quality report; raises on hard failures."""
     report = {

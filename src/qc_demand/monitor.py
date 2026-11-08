@@ -37,9 +37,9 @@ def seasonal_reference(train: pd.Series, window: pd.DatetimeIndex, days: int = 1
     Comparing December temperatures with a whole year of training data would always
     'drift'; the question is whether this December is unusual for a December.
     """
-    tr_doy = train.index.dayofyear.to_numpy()
+    tr_doy = train.index.day_of_year.to_numpy()
     keep = np.zeros(len(train), dtype=bool)
-    for d in np.unique(window.dayofyear):
+    for d in np.unique(window.day_of_year):
         dist = np.abs(tr_doy - d)
         keep |= np.minimum(dist, 365 - dist) <= days
     return train[keep]
