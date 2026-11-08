@@ -1,6 +1,6 @@
 # Forecasting Québec's Electricity Demand
 
-![CI](https://github.com/<FatimaezzahraaBouzite>/qc-demand-forecast/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/FatimaezzahraaBouzite/qc-demand-forecast/actions/workflows/ci.yml/badge.svg)
 
 A day-ahead forecast of Québec's average daily electricity demand, built end to end: public data
 ingestion and validation, exploratory analysis, a time-series backtest comparing statistical and
