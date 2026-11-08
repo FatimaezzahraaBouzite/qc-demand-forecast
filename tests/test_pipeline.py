@@ -179,3 +179,18 @@ def test_parse_hq_real_layout_excel_datetimes(tmp_path):
     pd.DataFrame({"Date": ts, "Moyenne (MW)": 23762.55}).to_excel(path, index=False)
     hourly = parse_hq_xlsx(path)
     assert len(hourly) == 48 and hourly["timestamp"].iloc[0] == pd.Timestamp("2019-01-01")
+
+
+def test_lightgbm_change_target_follows_level_shift(params):
+    """Trained before a +3 GW step, the change-target model must follow it; level model can't."""
+    from qc_demand.models import LightGBMModel
+
+    df = make_daily("2019-01-01", "2022-12-31")
+    df.loc["2022-01-01":, TARGET] += 3000
+    frame = model_ready(build_features(df, params), params)
+    train, test_idx = frame.loc[:"2021-12-31"], frame.loc["2022-03-01":"2022-04-30"].index
+    hyper = dict(n_estimators=200, learning_rate=0.05, verbose=-1, random_state=0)
+    level = LightGBMModel(params, **hyper).fit(train).predict(frame, test_idx)
+    change = LightGBMModel(params, target_base="lag_1", **hyper).fit(train).predict(frame, test_idx)
+    actual = frame.loc[test_idx, TARGET]
+    assert abs((change - actual).mean()) < abs((level - actual).mean()) / 5

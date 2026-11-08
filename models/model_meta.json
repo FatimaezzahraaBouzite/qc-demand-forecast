@@ -1,0 +1,49 @@
+{
+  "model": "lightgbm",
+  "selection_metric": "mape",
+  "backtest_mean": {
+    "lightgbm": 1.9305,
+    "sarimax": 2.2788,
+    "seasonal_naive": 7.2337
+  },
+  "skill_vs_naive_pct": 73.31,
+  "features": [
+    "dow",
+    "is_weekend",
+    "month",
+    "doy_sin",
+    "doy_cos",
+    "is_holiday",
+    "is_xmas_break",
+    "temp_mean",
+    "temp_max",
+    "temp_min",
+    "hdd",
+    "cdd",
+    "temp_range",
+    "temp_mean_lag1",
+    "temp_change",
+    "lag_1",
+    "lag_2",
+    "lag_7",
+    "lag_14",
+    "roll_mean_7",
+    "roll_mean_28",
+    "roll_std_7"
+  ],
+  "trained_until": "2023-06-30",
+  "trained_at": "2026-11-08T23:30:23+00:00",
+  "mlflow_run_id": "95b7a007a99d4a3ba8e1341cd30a9eab",
+  "top_features": {
+    "temp_change": 16736229084.9,
+    "dow": 3998910352.6,
+    "lag_1": 3924778859.6,
+    "lag_2": 3879114337.8,
+    "temp_max": 3563826820.2,
+    "temp_min": 2280287407.5,
+    "temp_mean": 1930627686.8,
+    "temp_mean_lag1": 1586474401.5,
+    "hdd": 1563572166.3,
+    "temp_range": 1072240297.4
+  }
+}

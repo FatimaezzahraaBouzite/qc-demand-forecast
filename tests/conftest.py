@@ -8,6 +8,8 @@ def workspace(tmp_path, monkeypatch):
     """Point every path in config at a temp dir and use fast test params."""
     from qc_demand import config
 
+    monkeypatch.chdir(tmp_path)
+
     for name in ("DATA_RAW", "DATA_PROCESSED", "MODELS_DIR", "REPORTS_DIR", "FORECASTS_DIR"):
         sub = getattr(config, name).relative_to(config.ROOT)
         monkeypatch.setattr(config, name, tmp_path / sub)

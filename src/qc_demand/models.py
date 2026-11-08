@@ -76,23 +76,39 @@ class SarimaxModel:
 
 
 class LightGBMModel:
-    """Gradient boosting on lag, calendar and weather features."""
-    name = "lightgbm"
+    """Gradient boosting on lag, calendar and weather features.
 
-    def __init__(self, params: dict, **hyper):
+    target_base (params.yaml): what the trees learn.
+      null        -> demand itself (the level)
+      "lag_1" / "lag_7" / "roll_mean_7" -> the CHANGE from that reference; the forecast is
+                     reference + predicted change. Trees cannot predict outside the range they
+                     saw in training, so learning changes lets the model follow new demand levels
+                     (e.g. the 2021 step up) and colder-than-ever days.
+    """
+    name = "lightgbm"
+    BASES = (None, "lag_1", "lag_7", "roll_mean_7")
+
+    def __init__(self, params: dict, target_base=None, **hyper):
+        if target_base not in self.BASES:
+            raise ValueError(f"target_base must be one of {self.BASES}, got {target_base!r}")
         self.params = params
+        self.target_base = target_base
         self.hyper = hyper
         self.cols = feature_columns(params)
         self.model = None
 
+    def _offset(self, frame: pd.DataFrame) -> pd.Series | float:
+        return frame[self.target_base] if self.target_base else 0.0
+
     def fit(self, train: pd.DataFrame) -> LightGBMModel:
         self.model = lgb.LGBMRegressor(**self.hyper)
-        self.model.fit(train[self.cols], train[TARGET])
+        self.model.fit(train[self.cols], train[TARGET] - self._offset(train))
         return self
 
     def predict(self, frame: pd.DataFrame, target_idx: pd.DatetimeIndex) -> pd.Series:
         X = frame.loc[target_idx, self.cols]
-        return pd.Series(self.model.predict(X), index=target_idx, name="pred")
+        pred = self.model.predict(X) + np.asarray(self._offset(X) if self.target_base else 0.0)
+        return pd.Series(pred, index=target_idx, name="pred")
 
     def feature_importance(self) -> pd.Series:
         return pd.Series(self.model.booster_.feature_importance("gain"),
