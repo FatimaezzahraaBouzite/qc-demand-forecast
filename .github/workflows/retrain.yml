@@ -1,0 +1,41 @@
+name: Retrain
+
+# Monthly retrain on real data. Pulls the DVC-tracked data from S3, rebuilds what
+# changed, and pushes the new model so the Lambda picks it up on its next run.
+on:
+  schedule:
+    - cron: "17 9 1 * *"   # 1st of the month, 09:17 UTC
+  workflow_dispatch:
+
+permissions:
+  id-token: write     # OIDC to AWS, no long-lived keys in GitHub
+  contents: write
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -e ".[dev,aws]" "dvc[s3]"
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ca-central-1
+      - name: Pull data, retrain, push
+        run: |
+          dvc pull
+          dvc repro
+          dvc push
+          aws s3 cp models/model.joblib s3://${{ secrets.BUCKET }}/models/model.joblib
+          aws s3 cp models/model_meta.json s3://${{ secrets.BUCKET }}/models/model_meta.json
+      - name: Commit updated lock + metrics
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add dvc.lock models/model_meta.json reports/*.json
+          git commit -m "Monthly retrain $(date +%F)" || echo "No changes"
+          git push

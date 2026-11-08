@@ -1,0 +1,59 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Daily Québec electricity demand forecast (Lambda + S3 + EventBridge + SNS)
+
+Parameters:
+  AlertEmail:
+    Type: String
+    Description: Email that receives monitoring alerts
+
+Resources:
+  DataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration: {Status: Enabled}   # every forecast log/model is recoverable
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlertEmail
+
+  ForecastFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      MemorySize: 2048
+      Timeout: 300
+      Architectures: [x86_64]
+      Environment:
+        Variables:
+          BUCKET: !Ref DataBucket
+          ALERT_TOPIC_ARN: !Ref AlertTopic
+          MLFLOW_DISABLE_AGENT_HINT: "1"
+      Policies:
+        - S3CrudPolicy: {BucketName: !Ref DataBucket}
+        - SNSPublishMessagePolicy: {TopicName: !GetAtt AlertTopic.TopicName}
+      Events:
+        Daily:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: "cron(23 6 * * ? *)"   # 06:23 Montréal time
+            ScheduleExpressionTimezone: America/Toronto
+            Input: '{"mode": "replay-next"}'
+    Metadata:
+      DockerContext: ..
+      Dockerfile: Dockerfile
+      DockerTag: latest
+
+Outputs:
+  BucketName:
+    Value: !Ref DataBucket
+  FunctionName:
+    Value: !Ref ForecastFunction

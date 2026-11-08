@@ -1,0 +1,59 @@
+# `dvc repro` rebuilds only the stages whose code, params or inputs changed.
+# `dvc push` sends data/ and models/ to the S3 remote (see README, Saturday block 3).
+stages:
+  ingest:
+    cmd: qc-demand ingest
+    deps:
+      - src/qc_demand/ingest.py
+    params:
+      - data
+    outs:
+      - data/processed/daily.parquet
+
+  train:
+    cmd: qc-demand train --until 2023-06-30
+    deps:
+      - data/processed/daily.parquet
+      - src/qc_demand/features.py
+      - src/qc_demand/models.py
+      - src/qc_demand/backtest.py
+      - src/qc_demand/train.py
+    params:
+      - features
+      - backtest
+      - models
+      - selection_metric
+    outs:
+      - models/model.joblib
+      - data/processed/features.parquet
+    metrics:
+      - models/model_meta.json:
+          cache: false
+      - reports/backtest_metrics.json:
+          cache: false
+    plots:
+      - reports/backtest_predictions.csv:
+          x: date
+          y: pred
+          cache: false
+
+  replay:
+    cmd: qc-demand predict --mode replay --start 2023-07-01 --end 2023-12-31
+    deps:
+      - models/model.joblib
+      - data/processed/daily.parquet
+      - src/qc_demand/predict.py
+    outs:
+      - forecasts/forecasts.csv:
+          cache: false
+
+  monitor:
+    cmd: qc-demand monitor
+    deps:
+      - forecasts/forecasts.csv
+      - src/qc_demand/monitor.py
+    params:
+      - monitoring
+    metrics:
+      - reports/monitoring.json:
+          cache: false

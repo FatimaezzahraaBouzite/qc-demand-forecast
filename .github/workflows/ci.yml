@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Lint
+        run: ruff check src tests
+      - name: Unit + end-to-end tests (synthetic data, no network)
+        run: pytest -q
+      - name: Smoke-run the CLI pipeline
+        run: |
+          qc-demand ingest --synthetic
+          qc-demand train --until 2023-06-30
+          qc-demand predict --mode replay --start 2023-07-01 --end 2023-07-31
+          qc-demand monitor
+      - uses: actions/upload-artifact@v4
+        with:
+          name: smoke-reports
+          path: |
+            reports/
+            models/model_meta.json
+
+  docker:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Lambda image
+        run: docker build -t qc-demand:ci .
