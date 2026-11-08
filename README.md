@@ -33,5 +33,3 @@ and monitored for accuracy decay and input drift.
 | `Dockerfile`, `deploy/` | Lambda container image, SAM template (S3 + Lambda + daily schedule + SNS) |
 | `app/dashboard.py` | Streamlit dashboard for non-technical stakeholders |
 
-Everything already runs end-to-end on synthetic data (that's what CI uses), so you are never
-debugging pipeline plumbing and real data at the same time.
