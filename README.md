@@ -7,9 +7,15 @@ ingestion and validation, exploratory analysis, a time-series backtest comparing
 machine-learning models, documented experiments, and an MLOps pipeline (MLflow, DVC, CI/CD, AWS
 Lambda, monitoring).
 
-**Result:** the selected model (LightGBM predicting the day-over-day change in demand) forecasts
-tomorrow's demand with a **1.93% mean absolute percentage error** over four held-out quarters,
-**73% better** than the seasonal-naive baseline (7.23%).
+**Results at a glance**
+
+| | |
+|---|---|
+| Selected model | LightGBM predicting the day-over-day change in demand |
+| Backtest error (4 held-out quarters, Jul 2022 – Jun 2023) | **1.93% MAPE**, 73% better than the seasonal-naive baseline (7.23%) |
+| Held-out replay (Jul – Dec 2023, never seen in training) | **1.39% MAPE** over 184 days |
+| Deployment | Daily AWS Lambda since November 2026; first runs at 0.66% MAPE |
+| Monitoring | Caught a real input-drift event: the unusually mild late December 2023 |
 
 ---
 
@@ -24,9 +30,10 @@ tomorrow's demand with a **1.93% mean absolute percentage error** over four held
 7. [Experiments](#7-experiments)
 8. [Final model](#8-final-model)
 9. [Production pipeline (MLOps)](#9-production-pipeline-mlops)
-10. [Limitations and next steps](#10-limitations-and-next-steps)
-11. [How to run it](#11-how-to-run-it)
-12. [Repository structure](#12-repository-structure)
+10. [Engineering lessons](#10-engineering-lessons)
+11. [Limitations and next steps](#11-limitations-and-next-steps)
+12. [How to run it](#12-how-to-run-it)
+13. [Repository structure](#13-repository-structure)
 
 ---
 
@@ -385,6 +392,14 @@ worth twice the trees and three more settings to justify. **Not kept**: the defa
 On an average day (~21 GW), a 1.93% error is about ±400 MW. SARIMAX (2.28%, unbiased) remains a close
 second and a useful fallback: it is simpler to explain and extrapolates naturally to colder days.
 
+**What drives the final model.** Because the final model predicts the *change* from yesterday, its
+most important feature is no longer yesterday's demand but **the change in temperature since
+yesterday** (`temp_change`), about four times more important than the next features (day of week,
+demand one and two days ago, then daily maximum and minimum temperature). In plain words: tomorrow's
+demand is today's demand, adjusted mainly for how much colder or warmer tomorrow will be, and for the
+day of the week. This is the hockey-stick relationship from section 4.1 expressed as day-to-day
+changes.
+
 **Selection, step by step:** each `qc-demand train` run backtests the three candidates
 (3 models × 4 folds = 12 temporary models, scored and discarded), selects the lowest average MAPE, and
 refits the winner once on all data up to the cutoff. That model is saved to `models/model.joblib`,
@@ -401,7 +416,7 @@ with its description and scores in `models/model_meta.json`, and a copy is store
                     │                                                         DVC ──> S3
  EventBridge (daily) ──> Lambda container ──> predict ──> forecasts.csv ──> monitor ──> email alert
                                                           (S3, versioned)   (accuracy + drift)
- GitHub Actions: lint, tests, pipeline smoke run and Docker build on every push; monthly retrain
+ GitHub Actions: lint, tests, pipeline smoke run and Docker build on every push; monthly retrain (configured)
  Streamlit: stakeholder dashboard (forecast vs actual, error trend, model comparison)
 ```
 
@@ -410,7 +425,7 @@ with its description and scores in `models/model_meta.json`, and a copy is store
 | **MLflow** | Records every training run: parameters, per-fold metrics, model files | Compare experiments; recover any past model |
 | **DVC** (`dvc.yaml`, `params.yaml`) | Declares the pipeline stages (ingest → train → replay → monitor) with their inputs and outputs; stores data and models in S3 | `dvc repro` reruns only what changed; any commit can be rebuilt exactly |
 | **Tests** (`tests/`, 17 tests) | Parsing (including the real file layout and day-first dates), leakage, fold integrity, level-shift handling, drift detection, a full end-to-end run on synthetic data | Catch errors before they reach production |
-| **CI** (`.github/workflows/ci.yml`) | Lint, tests, a full pipeline run on synthetic data, Docker build, on every push | A broken change is flagged before deployment |
+| **CI** (`.github/workflows/ci.yml`) | Lint, tests, a full pipeline run on synthetic data, and the Lambda Docker image build, on every push (Python 3.12, the same version as the Lambda) | A broken change is flagged before deployment |
 | **AWS** (`Dockerfile`, `deploy/`) | A Lambda container runs daily at 06:23 Montréal time: loads the model and history from S3, forecasts the next day, appends to the forecast log, runs monitoring, emails an alert if needed | Runs unattended, inside the AWS free tier |
 | **Monitoring** (`monitor.py`) | 14-day rolling MAPE vs the backtest MAPE (alert above 1.5×), and temperature drift (PSI) against the same season in training | Detects decay, and unusual weather before it causes errors |
 | **Dashboard** (`app/dashboard.py`) | Forecast vs actual, error trend, model comparison, main drivers | Explains results to non-technical stakeholders |
@@ -441,12 +456,42 @@ in training or selection.
 Replay accuracy is better than the backtest (1.93%) for two reasons: replay uses observed rather
 than forecast temperatures, and July–December includes the easy summer months.
 
-**The drift alert.** Late December 2023 was unusually mild, with daily mean temperatures around
-+1 °C when this period is normally well below freezing. Monitoring compares recent temperatures
-with the same time of year in training, so it flagged weather unlike any late December the model
-had seen. Accuracy stayed within its threshold, so the right response is to investigate and keep
-watching, not to retrain. Separating input drift from performance decay is what lets the
-monitoring tell these two situations apart.
+#### Investigating the December alert
+
+Monitoring checks two separate signals over the last 14 days (18–31 December 2023), and they
+disagreed:
+
+| Signal | Value | Threshold | Result |
+|---|---|---|---|
+| Accuracy: rolling 14-day MAPE | 1.81% | 2.90% (1.5 × backtest 1.93%) | OK |
+| Bias over the same 14 days | +50 MW | – | Negligible (~0.2% of demand) |
+| Input drift: temperature PSI vs the same season in training | **0.42** | 0.2 | **Alert** |
+
+**What happened.** Late December 2023 was unusually mild. The last days of the year averaged
++1.7 °C (27 December), +1.7 °C, +0.7 °C and −0.8 °C before turning colder on the 31st (−4.8 °C),
+when this period is normally well below freezing in southern Québec. A PSI above 0.2 means the
+temperature distribution differs substantially from late Decembers in 2019–2022.
+
+**Why accuracy held up anyway.** The temperatures were unusual *for the season*, but not unusual
+*overall*: the model had seen plenty of days around 0 °C in November and March. Because the final
+model predicts the day-over-day change, driven mainly by the change in temperature, it does not need
+to have seen a mild December specifically. The 31 December forecast shows this: when the temperature
+dropped by 4 °C, the forecast rose by about 2.4 GW (24.9 → 27.2 GW), close to the ~550 MW per degree
+measured in the EDA.
+
+**Why December is still the hardest month.** The 14-day error (1.81%) is higher than the replay
+average (1.39%), as the EDA predicted: winter demand is more volatile, and the Christmas period
+changes behaviour (offices and industry closed).
+
+**Decision.** No retraining. The alert correctly reports unusual inputs, and the accuracy check
+shows the model handled them. The right response is to keep watching: if mild-winter drift
+continued *and* the 14-day error crossed its threshold, that would trigger a retrain. This is the
+reason for monitoring drift and performance separately: drift alone is a warning to investigate,
+not proof that the model is failing.
+
+**Possible improvement:** add a second, simpler drift check for temperatures outside the *overall*
+training range, which would flag record cold or heat the model has truly never seen, separately from
+the seasonal check.
 
 
 **Reproducibility in practice:** changing one parameter and running `dvc repro` reran only the
@@ -454,8 +499,71 @@ affected stages (ingest was skipped), and `dvc params diff` / `dvc metrics diff`
 change and its effect on every metric. Reverting the parameter restored the previous results from
 DVC's cache without retraining.
 
+### Deployment on AWS
 
-## 10. Limitations and next steps
+The pipeline is deployed with AWS SAM (`deploy/template.yaml`) in `ca-central-1`:
+
+| Resource | Role |
+|---|---|
+| **Lambda function** (container image, Python 3.12, 2 GB memory, 5-minute timeout) | Runs one forecast + monitoring cycle |
+| **ECR repository** | Stores the container image |
+| **S3 bucket** (versioned, no public access) | Holds the model, its metadata, the demand history, the forecast log and the latest monitoring report; versioning means every past file can be recovered |
+| **EventBridge Scheduler** | Invokes the Lambda every day at 06:23, America/Toronto time |
+| **SNS topic** (email subscription) | Sends the monitoring report by email when its status is "alert" |
+| **IAM roles** | Least-privilege access: the Lambda can only read and write its own bucket and publish to its own topic |
+
+**Each daily run:** download the model, history and forecast log from S3 → forecast the next day →
+append to `forecasts/forecasts.csv` → recompute monitoring → upload the results → email if alert.
+In replay mode, each run moves one day through July–December 2023, so the deployed system is scored
+against real actuals; switching the schedule input to `{"mode": "live"}` makes it forecast tomorrow
+with forecast weather instead.
+
+**First runs:**
+
+| Target date | Issued (UTC) | Trigger |
+|---|---|---|
+| 2023-07-01 | 2026-11-09 02:40 | Manual invoke after deployment |
+| 2023-07-02 | 2026-11-09 11:23 | **Automatic daily schedule** (06:23 Montréal time) |
+| 2023-07-03 | 2026-11-09 13:29 | Manual invoke after a handler fix |
+
+After three days the deployed monitoring reported **0.66% MAPE**, status **ok**. A run takes about
+33 seconds, almost all of it start-up (importing the scientific Python stack), and uses ~400 MB of
+memory.
+
+### Stakeholder dashboard
+
+![Dashboard: headline numbers and forecast vs actual](docs/dashboard_top.png)
+![Dashboard: model comparison and drivers](docs/dashboard_bottom.png)
+
+A one-page Streamlit app (`streamlit run app/dashboard.py`) for non-technical readers: the model in
+production and its typical error, how much better it is than "same day last week", forecast vs
+actual for the July–December 2023 replay, the rolling error against its alert threshold, the model
+comparison, and the main drivers of the forecast. It reads the pipeline's output files directly, so
+it updates after every retrain or replay. The health indicator shows the December 2023 temperature
+drift alert (see the production replay results above).
+
+---
+
+## 10. Engineering lessons
+
+Problems found while building the project, and how each was fixed. Several were caught by tests or
+CI before they could affect results.
+
+| Problem | How it showed up | Fix |
+|---|---|---|
+| **Column labels differ from the documentation** | Ingestion failed: the parser looked for "Demande" but the files say "Moyenne (MW)" | Parser finds columns by their content (dates, values in a plausible MW range), with tests for several layouts |
+| **Day/month date order** | `05/02/2019` could be read as 2 May | Text dates parsed day-first; tests check that February dates stay in February |
+| **Hour-ending timestamps** | The midnight hour would be counted in the wrong day | Shift timestamps back one hour before aggregating |
+| **SARIMAX degenerate fits** | SARIMAX lost to the naive baseline; AR and MA terms cancelled out | Standardize demand and regressors before fitting (demand ≈ 20,000 MW overwhelmed the optimizer) |
+| **Tests leaking into the experiment log** | MLflow showed results from synthetic test data next to real runs | Tests run from a temporary folder, so their MLflow files never reach the project |
+| **LightGBM systematic under-forecast** | −336 MW bias in the backtest | Diagnosed with the EDA (2021 level step, record cold) and fixed by predicting day-over-day changes (experiment 2) |
+| **Drift check alarming every winter** | Comparing December with a whole year always looks like drift | Compare recent temperatures with the same time of year (±15 days) in training |
+| **Docker build failure in CI** | The Python 3.11 Lambda image (Amazon Linux 2) is too old for current numpy wheels, so pip tried to compile numpy without a compiler | Move to the Python 3.12 Lambda image (Amazon Linux 2023) and align CI to Python 3.12 |
+| **Event format from the Windows CLI** | A manual invoke from PowerShell delivered the event as a JSON string, and the handler crashed | The handler accepts the event as an object, a (double-)encoded string, or nothing, and rejects unknown modes clearly |
+
+---
+
+## 11. Limitations and next steps
 
 **Limitations**
 
@@ -469,6 +577,11 @@ DVC's cache without retraining.
   daily mean.
 - **Data.** Hydro-Québec's open data is operational, not audited, and its history currently ends in
   2023. Licence CC-BY-NC 4.0: suitable for a portfolio, not commercial use.
+- **Heavy Lambda image.** The image includes training-only packages (MLflow and its dependencies), so
+  start-up exceeds Lambda's 10-second initialization window and is completed inside the invocation.
+  Harmless for a daily job, but wasteful.
+- **The replay window is finite.** The deployed replay covers 184 days and then stops; continuing
+  beyond that needs live mode.
 
 **Next steps**
 
@@ -476,13 +589,15 @@ DVC's cache without retraining.
 - Hourly and daily-peak forecasting (`peak_mw` is already prepared)
 - Features relative to yesterday's demand, to reduce the remaining bias
 - Live mode with the Hydro-Québec real-time feed and weather forecasts
-- Automatic monthly retraining via `retrain.yml`
+- Automatic monthly retraining via `retrain.yml` (needs an AWS role for GitHub Actions)
+- A slim inference-only image (no MLflow, Flask or matplotlib) for faster start-up and lower storage
 
 ---
 
-## 11. How to run it
+## 12. How to run it
 
-Requires Python 3.11 (3.10+ works). Commands shown for Windows PowerShell.
+Requires Python 3.10 or later (developed on 3.11; CI and the Lambda use 3.12). Commands shown for
+Windows PowerShell.
 
 ```powershell
 py -3.11 -m venv .venv
@@ -502,17 +617,32 @@ streamlit run app/dashboard.py
 With DVC configured, `dvc repro` runs the whole pipeline and reruns only the stages whose code, data
 or parameters changed.
 
-To deploy to AWS (needs the AWS and SAM CLIs and Docker):
+To deploy to AWS (needs the AWS and SAM CLIs, Docker, and an AWS user with access keys):
 
 ```powershell
 cd deploy
 sam build --template template.yaml
-sam deploy --guided
+sam deploy --guided            # stack qc-demand, region ca-central-1, your alert email
+cd ..
+
+# give the Lambda its model and history
+$B = aws cloudformation describe-stacks --stack-name qc-demand --query "Stacks[0].Outputs[?OutputKey=='BucketName'].OutputValue" --output text
+aws s3 cp models/model.joblib "s3://$B/models/model.joblib"
+aws s3 cp models/model_meta.json "s3://$B/models/model_meta.json"
+aws s3 cp data/processed/daily.parquet "s3://$B/data/daily.parquet"
+
+# run once by hand, then read the forecast log
+sam remote invoke ForecastFunction --stack-name qc-demand
+aws s3 cp "s3://$B/forecasts/forecasts.csv" -
+sam logs -n ForecastFunction --stack-name qc-demand      # Lambda output and errors
 ```
+
+To remove everything from AWS: `sam delete --stack-name qc-demand`, then empty and delete the DVC
+bucket in the S3 console.
 
 ---
 
-## 12. Repository structure
+## 13. Repository structure
 
 ```
 ├── params.yaml                 all settings: data, features, backtest, models, monitoring
@@ -532,9 +662,14 @@ sam deploy --guided
 ├── notebooks/01_eda.ipynb      exploratory analysis
 ├── tests/                      17 tests
 ├── app/dashboard.py            Streamlit dashboard
-├── Dockerfile                  Lambda container image
-├── deploy/                     AWS SAM template and Lambda handler
+├── Dockerfile                  Lambda container image (Python 3.12, Amazon Linux 2023)
+├── deploy/
+│   ├── template.yaml           AWS SAM: Lambda, S3, schedule, SNS, IAM
+│   ├── lambda_handler.py       daily forecast + monitoring cycle
+│   └── samconfig.toml          saved deployment settings
 ├── .github/workflows/          CI on every push; monthly retrain
+├── docs/                       dashboard screenshots
+├── reports/figures/            EDA figures (PNG, plus interactive HTML)
 ├── data/  models/  reports/  forecasts/    pipeline outputs
 ```
 
