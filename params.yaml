@@ -17,7 +17,7 @@ features:
 
 backtest:
   n_folds: 4
-  test_days: 91        # one quarter per fold, rolling origin, expanding window
+  test_days: 91       # one quarter per fold, rolling origin, expanding window
   min_train_days: 730
 
 models:

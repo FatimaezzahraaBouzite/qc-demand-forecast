@@ -144,14 +144,14 @@ stages:
     outs:
     - path: forecasts/forecasts.csv
       hash: md5
-      md5: c32ece98756017a6eb623999dd97117e
+      md5: ad3538f33356e0cea7155635c5e4b93a
       size: 12503
   monitor:
     cmd: qc-demand monitor
     deps:
     - path: forecasts/forecasts.csv
       hash: md5
-      md5: c32ece98756017a6eb623999dd97117e
+      md5: ad3538f33356e0cea7155635c5e4b93a
       size: 12503
     - path: src/qc_demand/monitor.py
       hash: md5

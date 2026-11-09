@@ -276,6 +276,12 @@ the four folds.
   (`qc-demand train --until 2023-06-30`). July–December 2023 is never seen and is used to simulate
   production (section 9).
 
+**Robustness check.** Rerunning the backtest with four 60-day folds instead of 91 (one DVC
+parameter change, `dvc repro`) raised every model's error, because the test period then covers only
+November 2022 – June 2023, with no summer and more winter: LightGBM 2.38%, SARIMAX 2.73%, seasonal
+naive 8.96%. The ranking is unchanged and LightGBM's advantage over the baseline is identical (73%),
+so the model choice does not depend on how the test period is cut.
+
 ### 5.4 Metrics
 
 | Metric | Meaning | Why |
@@ -421,10 +427,33 @@ unusual for a December.
 
 ### Production replay results (July–December 2023)
 
-*To be completed after running the replay and monitoring:* replay MAPE ___%, bias ___ MW, monitoring
-status ___, and any alerts and their explanation.
+The final model forecast the held-out second half of 2023 one day at a time, on data it never saw
+in training or selection.
 
----
+| | Value |
+|---|---|
+| Days forecast | 184 |
+| Replay MAPE | **1.39%** |
+| Last 14 days MAPE | 1.81% (alert threshold: 1.5 × backtest MAPE) |
+| Last 14 days bias | +50 MW |
+| Monitoring status | **Alert: temperature drift** (PSI 0.42 > 0.2, 18–31 December 2023) |
+
+Replay accuracy is better than the backtest (1.93%) for two reasons: replay uses observed rather
+than forecast temperatures, and July–December includes the easy summer months.
+
+**The drift alert.** Late December 2023 was unusually mild, with daily mean temperatures around
++1 °C when this period is normally well below freezing. Monitoring compares recent temperatures
+with the same time of year in training, so it flagged weather unlike any late December the model
+had seen. Accuracy stayed within its threshold, so the right response is to investigate and keep
+watching, not to retrain. Separating input drift from performance decay is what lets the
+monitoring tell these two situations apart.
+
+
+**Reproducibility in practice:** changing one parameter and running `dvc repro` reran only the
+affected stages (ingest was skipped), and `dvc params diff` / `dvc metrics diff` reported the
+change and its effect on every metric. Reverting the parameter restored the previous results from
+DVC's cache without retraining.
+
 
 ## 10. Limitations and next steps
 
