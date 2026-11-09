@@ -32,8 +32,8 @@
     "roll_std_7"
   ],
   "trained_until": "2023-06-30",
-  "trained_at": "2026-11-08T23:30:23+00:00",
-  "mlflow_run_id": "95b7a007a99d4a3ba8e1341cd30a9eab",
+  "trained_at": "2026-11-09T00:37:30+00:00",
+  "mlflow_run_id": "ae2dcd0f2da244a78ee54d5c381d419b",
   "top_features": {
     "temp_change": 16736229084.9,
     "dow": 3998910352.6,

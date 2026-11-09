@@ -1,0 +1,170 @@
+schema: '2.0'
+stages:
+  ingest:
+    cmd: qc-demand ingest
+    deps:
+    - path: src/qc_demand/ingest.py
+      hash: md5
+      md5: 3666ed62d23b0367c07f5f927d256bd2
+      size: 9916
+    params:
+      params.yaml:
+        data:
+          years:
+          - 2019
+          - 2020
+          - 2021
+          - 2022
+          - 2023
+          hq_url_template: 
+            https://www.hydroquebec.com/data/documents-donnees/donnees-ouvertes/xlsx/historique-demande/{year}-demande-electricite-quebec.xlsx
+          cities:
+            montreal:
+              lat: 45.5
+              lon: -73.57
+              weight: 0.6
+            quebec:
+              lat: 46.81
+              lon: -71.21
+              weight: 0.2
+            gatineau:
+              lat: 45.48
+              lon: -75.7
+              weight: 0.1
+            sherbrooke:
+              lat: 45.4
+              lon: -71.89
+              weight: 0.1
+          timezone: America/Toronto
+    outs:
+    - path: data/processed/daily.parquet
+      hash: md5
+      md5: b312223e12036b4251ed49993ab04cfe
+      size: 78691
+  train:
+    cmd: qc-demand train --until 2023-06-30
+    deps:
+    - path: data/processed/daily.parquet
+      hash: md5
+      md5: b312223e12036b4251ed49993ab04cfe
+      size: 78691
+    - path: src/qc_demand/backtest.py
+      hash: md5
+      md5: b51d9fcfb4e525dcc32f644b72da816a
+      size: 2193
+    - path: src/qc_demand/features.py
+      hash: md5
+      md5: 4b528e52881f6029e7e3c14fb585f9f8
+      size: 2527
+    - path: src/qc_demand/models.py
+      hash: md5
+      md5: 50a517b4cbc930061dc7716f8c575ace
+      size: 5780
+    - path: src/qc_demand/train.py
+      hash: md5
+      md5: 38a262cb25466f6e421de983e580b2a0
+      size: 4174
+    params:
+      params.yaml:
+        backtest:
+          n_folds: 4
+          test_days: 91
+          min_train_days: 730
+        features:
+          lags:
+          - 1
+          - 2
+          - 7
+          - 14
+          rolling_windows:
+          - 7
+          - 28
+          hdd_base_c: 15.0
+          cdd_base_c: 18.0
+        models:
+          seasonal_naive: {}
+          sarimax:
+            order:
+            - 1
+            - 0
+            - 1
+            seasonal_order:
+            - 1
+            - 0
+            - 1
+            - 7
+          lightgbm:
+            target_base: lag_1
+            n_estimators: 600
+            learning_rate: 0.03
+            num_leaves: 31
+            min_child_samples: 20
+            subsample: 0.9
+            subsample_freq: 1
+            colsample_bytree: 0.9
+            random_state: 42
+            verbose: -1
+        selection_metric: mape
+    outs:
+    - path: data/processed/features.parquet
+      hash: md5
+      md5: fecb869cc18a9cbd329a8d274e071027
+      size: 242863
+    - path: models/model.joblib
+      hash: md5
+      md5: 981886eb1675e9cc47d2fc25800fea2a
+      size: 1622787
+    - path: models/model_meta.json
+      hash: md5
+      md5: 62510be84406823d051303cee628c2fa
+      size: 1061
+    - path: reports/backtest_metrics.json
+      hash: md5
+      md5: 8bcb9736b563eb989a0060a8c6bba713
+      size: 3833
+    - path: reports/backtest_predictions.csv
+      hash: md5
+      md5: f15cbea583111019ebae75428244379a
+      size: 65092
+  replay:
+    cmd: qc-demand predict --mode replay --start 2023-07-01 --end 2023-12-31
+    deps:
+    - path: data/processed/daily.parquet
+      hash: md5
+      md5: b312223e12036b4251ed49993ab04cfe
+      size: 78691
+    - path: models/model.joblib
+      hash: md5
+      md5: 981886eb1675e9cc47d2fc25800fea2a
+      size: 1622787
+    - path: src/qc_demand/predict.py
+      hash: md5
+      md5: bf44e3053cf14eba0d4a544a5efb301d
+      size: 5987
+    outs:
+    - path: forecasts/forecasts.csv
+      hash: md5
+      md5: c32ece98756017a6eb623999dd97117e
+      size: 12503
+  monitor:
+    cmd: qc-demand monitor
+    deps:
+    - path: forecasts/forecasts.csv
+      hash: md5
+      md5: c32ece98756017a6eb623999dd97117e
+      size: 12503
+    - path: src/qc_demand/monitor.py
+      hash: md5
+      md5: d703b94c3a1cf7ca0d1b397c81fe6aef
+      size: 4277
+    params:
+      params.yaml:
+        monitoring:
+          window_days: 14
+          mape_alert_ratio: 1.5
+          psi_alert: 0.2
+    outs:
+    - path: reports/monitoring.json
+      hash: md5
+      md5: b30b320302a9d60b742f3bd8cd679612
+      size: 329

@@ -1,0 +1,17 @@
+{
+  "status": "alert",
+  "alerts": [
+    "Temperature PSI 0.417 > 0.2 (input drift)"
+  ],
+  "model": "lightgbm",
+  "n_evaluated": 184,
+  "overall_mape": 1.385,
+  "recent_mape": 1.807,
+  "backtest_mape": 1.9305,
+  "recent_bias_mw": 50.2,
+  "temp_psi": 0.4173,
+  "window": [
+    "2023-12-18",
+    "2023-12-31"
+  ]
+}

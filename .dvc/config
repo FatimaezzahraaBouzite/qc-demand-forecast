@@ -1,0 +1,5 @@
+[core]
+    remote = storage
+['remote "storage"']
+    url = s3://qc-demand-feb/dvc
+    region = ca-central-1
