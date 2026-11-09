@@ -52,12 +52,30 @@ def _push():
     s3.upload_file(str(config.MONITOR_FILE), BUCKET, "reports/monitoring.json")
 
 
+def _event_mode(event) -> str:
+    """Accept the event however it arrives: a dict (schedule, console), a JSON string
+    (some CLI/PowerShell invocations double-encode it), or nothing at all."""
+    for _ in range(3):  # unwrap up to 3 layers of JSON encoding
+        if not isinstance(event, (str, bytes)):
+            break
+        try:
+            event = json.loads(event)
+        except ValueError:
+            event = {"mode": event.decode() if isinstance(event, bytes) else event}
+    if not isinstance(event, dict):
+        event = {}
+    mode = event.get("mode", "replay-next")
+    if mode not in ("replay-next", "live"):
+        raise ValueError(f"Unknown mode {mode!r}; use 'replay-next' or 'live'")
+    return mode
+
+
 def handler(event, _context):
     import pandas as pd
 
     _pull()
     params = config.load_params()
-    mode = (event or {}).get("mode", "replay-next")
+    mode = _event_mode(event)
 
     if mode == "live":
         predict.ingest_recent(params)

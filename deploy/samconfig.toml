@@ -1,0 +1,14 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "qc-demand"
+resolve_s3 = true
+s3_prefix = "qc-demand"
+region = "ca-central-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "AlertEmail=\"fatimazahrabouzite@gmail.com\""
+image_repositories = ["ForecastFunction=361082682758.dkr.ecr.ca-central-1.amazonaws.com/qcdemand6e406e1c/forecastfunction2edac9ffrepo"]
+
+[default.global.parameters]
+region = "ca-central-1"
